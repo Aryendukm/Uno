@@ -2,49 +2,64 @@ import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import CardComponent from './Card';
 import Chat from './Chat';
-import { Card, Color, isValidPlay } from '../utils/gameLogic';
+import { Card, Color } from '../utils/gameLogic';
 import { motion, AnimatePresence } from 'framer-motion';
-import { User, ArrowRight, RotateCcw, Play, Zap } from 'lucide-react';
+import { User, ArrowRight, Play, Zap, ArrowLeftRight, Users } from 'lucide-react';
 
 const GameTable: React.FC = () => {
-  const { gameState, myPlayerId, playCard, drawCard, isHost, startGame, applyRule } = useGame();
-  const [wildCardId, setWildCardId] = useState<string | null>(null);
+  const { 
+    gameState, myPlayerId, playCards, drawCard, playDrawnCard, 
+    isHost, startGame, applyRule 
+  } = useGame();
+
+  const [wildCardIds, setWildCardIds] = useState<string[] | null>(null);
   const [blankWildCardId, setBlankWildCardId] = useState<string | null>(null);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set());
 
+  // Rule 4: Shuffle Hand state
+  const [shuffleCardId, setShuffleCardId] = useState<string | null>(null);
+  const [shuffleAction, setShuffleAction] = useState<'swap_with' | 'swap_two' | null>(null);
+  const [shuffleTargetIds, setShuffleTargetIds] = useState<string[]>([]);
+
+  // Rule 3: Draw-and-play wild color state
+  const [drawnWildPlayCardId, setDrawnWildPlayCardId] = useState<string | null>(null);
+
   if (!gameState) return null;
 
-  const { players, currentPlayerIndex, discardPile, direction, currentColor, winner, status, lastAction, unoCalledBy } = gameState;
+  const { 
+    players, currentPlayerIndex, discardPile, direction, currentColor, 
+    winner, status, lastAction, unoCalledBy, pendingWild4Stack, drawnCardId 
+  } = gameState;
   
   const me = players.find(p => p.id === myPlayerId);
   const isMyTurn = players[currentPlayerIndex].id === myPlayerId;
   const topCard = discardPile[discardPile.length - 1];
 
+  // ─── Play Handlers ─────────────────────────────────────────────────────────
+
   const handleCardClick = (card: Card) => {
     if (!isMyTurn) return;
+    if (drawnCardId) return; // Must resolve draw-and-play first
     
-    // If it's a wild card, open color picker
-    if (card.value === 'wild') {
-      setWildCardId(card.id);
+    // If stacking +4, we can only select wild4 cards
+    if (pendingWild4Stack > 0) {
+      if (card.value !== 'wild4') return;
+      const newSelected = new Set(selectedCardIds);
+      if (newSelected.has(card.id)) newSelected.delete(card.id);
+      else newSelected.add(card.id);
+      setSelectedCardIds(newSelected);
       return;
     }
 
-    // If it's a blank wild, open rule picker
-    if (card.value === 'blank_wild') {
-      setBlankWildCardId(card.id);
-      return;
-    }
-
-    // For non-wild cards, allow multi-selection of same-numbered cards
+    // Normal multi-selection logic
     const newSelected = new Set(selectedCardIds);
     if (newSelected.has(card.id)) {
       newSelected.delete(card.id);
     } else {
-      // Check if we can add this card (must be same number as first selected)
       if (newSelected.size > 0 && me?.hand) {
         const firstSelectedCard = me.hand.find(c => newSelected.has(c.id));
         if (firstSelectedCard && firstSelectedCard.value !== card.value) {
-          // Cannot mix different numbers
+          // Cannot mix different numbers/values
           return;
         }
       }
@@ -59,30 +74,101 @@ const GameTable: React.FC = () => {
     const cardsToPlay = me.hand.filter(c => selectedCardIds.has(c.id));
     if (cardsToPlay.length === 0) return;
 
-    // Play all selected cards with animation
-    cardsToPlay.forEach((card, index) => {
-      setTimeout(() => {
-        playCard(card.id);
-      }, index * 150);
-    });
+    const firstCard = cardsToPlay[0];
     
+    // Handle Special Modal Requirements
+    if (firstCard.value === 'wild' || firstCard.value === 'wild4') {
+      setWildCardIds(Array.from(selectedCardIds));
+      setSelectedCardIds(new Set());
+      return;
+    }
+
+    if (firstCard.value === 'blank_wild') {
+      setBlankWildCardId(firstCard.id);
+      setSelectedCardIds(new Set());
+      return;
+    }
+
+    if (firstCard.value === 'shuffle') {
+      setShuffleCardId(firstCard.id);
+      setShuffleAction(null);
+      setShuffleTargetIds([]);
+      setSelectedCardIds(new Set());
+      return;
+    }
+
+    // Normal play
+    playCards(Array.from(selectedCardIds));
     setSelectedCardIds(new Set());
   };
 
   const handleColorSelect = (color: Color) => {
-    if (wildCardId) {
-      playCard(wildCardId, color);
-      setWildCardId(null);
+    if (wildCardIds) {
+      playCards(wildCardIds, color);
+      setWildCardIds(null);
+    } else if (drawnWildPlayCardId) {
+      playDrawnCard(true, color);
+      setDrawnWildPlayCardId(null);
     }
   };
 
   const handleRuleSelect = (rule: string) => {
     if (blankWildCardId) {
-      playCard(blankWildCardId);
+      playCards([blankWildCardId]);
       applyRule(rule);
       setBlankWildCardId(null);
     }
   };
+
+  // ─── Rule 3: Draw and Play Handlers ────────────────────────────────────────
+
+  const handleDrawAndPlayDecision = (play: boolean) => {
+    if (!play) {
+      playDrawnCard(false);
+      return;
+    }
+
+    // Wants to play it
+    const drawnCard = me?.hand.find(c => c.id === drawnCardId);
+    if (!drawnCard) return;
+
+    if (drawnCard.color === 'black') {
+      // Need color picker first
+      setDrawnWildPlayCardId(drawnCard.id);
+    } else {
+      playDrawnCard(true);
+    }
+  };
+
+  // ─── Rule 4: Shuffle Hand Handlers ─────────────────────────────────────────
+
+  const handleShuffleTargetSelect = (playerId: string) => {
+    if (shuffleTargetIds.includes(playerId)) {
+      setShuffleTargetIds(shuffleTargetIds.filter(id => id !== playerId));
+    } else {
+      if (shuffleAction === 'swap_with' && shuffleTargetIds.length === 1) return;
+      if (shuffleAction === 'swap_two' && shuffleTargetIds.length === 2) return;
+      setShuffleTargetIds([...shuffleTargetIds, playerId]);
+    }
+  };
+
+  const confirmShuffle = () => {
+    if (!shuffleCardId || !shuffleAction) return;
+    if (shuffleAction === 'swap_with' && shuffleTargetIds.length === 1) {
+      playCards([shuffleCardId], undefined, shuffleAction, shuffleTargetIds);
+    } else if (shuffleAction === 'swap_two' && shuffleTargetIds.length === 2) {
+      playCards([shuffleCardId], undefined, shuffleAction, shuffleTargetIds);
+    } else {
+      return; // Not enough targets
+    }
+    
+    // Reset state
+    setShuffleCardId(null);
+    setShuffleAction(null);
+    setShuffleTargetIds([]);
+  };
+
+  // ─── Render Helpers ────────────────────────────────────────────────────────
 
   if (status === 'ended' && winner) {
       return (
@@ -109,6 +195,8 @@ const GameTable: React.FC = () => {
       );
   }
 
+  const drawnCardToPlay = drawnCardId ? me?.hand.find(c => c.id === drawnCardId) : null;
+
   return (
     <div className="relative w-full h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden flex flex-col">
       {/* Background Texture */}
@@ -122,7 +210,7 @@ const GameTable: React.FC = () => {
           {/* Table Circle Background */}
           <div className="absolute w-3/4 aspect-square rounded-full bg-gradient-to-br from-green-900/30 to-emerald-900/20 border-4 border-green-700/40 shadow-2xl" />
 
-          {/* Players positioned around the circle */}
+          {/* Players */}
           {players.map((player, idx) => {
             const totalPlayers = players.length;
             const angle = (idx / totalPlayers) * 360 - 90;
@@ -178,17 +266,6 @@ const GameTable: React.FC = () => {
                     </motion.div>
                   )}
                 </div>
-
-                {/* Current Indicator */}
-                {isCurrent && (
-                  <motion.div
-                    animate={{ y: [0, -8, 0] }}
-                    transition={{ duration: 1, repeat: Infinity }}
-                    className="text-xl"
-                  >
-                    ➡️
-                  </motion.div>
-                )}
               </motion.div>
             );
           })}
@@ -197,11 +274,11 @@ const GameTable: React.FC = () => {
           <div className="absolute flex items-center justify-center gap-16 z-20">
             {/* Deck */}
             <motion.div
-              whileHover={{ scale: 1.08 }}
-              className="relative group cursor-pointer"
-              onClick={isMyTurn ? drawCard : undefined}
+              whileHover={isMyTurn && !drawnCardId ? { scale: 1.08 } : undefined}
+              className={`relative group ${isMyTurn && !drawnCardId ? 'cursor-pointer' : 'cursor-not-allowed opacity-80'}`}
+              onClick={(isMyTurn && !drawnCardId) ? drawCard : undefined}
             >
-              <div className="w-20 h-28 md:w-24 md:h-32 bg-gradient-to-br from-blue-700 to-blue-900 rounded-xl border-4 border-white shadow-2xl flex items-center justify-center relative hover:shadow-blue-500/50 transition-all">
+              <div className="w-20 h-28 md:w-24 md:h-32 bg-gradient-to-br from-blue-700 to-blue-900 rounded-xl border-4 border-white shadow-2xl flex items-center justify-center relative transition-all">
                 <div className="w-16 h-24 md:w-20 md:h-28 border-2 border-blue-600 rounded-lg flex items-center justify-center">
                   <span className="text-lg md:text-2xl font-black text-blue-400">UNO</span>
                 </div>
@@ -209,13 +286,22 @@ const GameTable: React.FC = () => {
               <div className="absolute top-1 left-1 w-full h-full bg-blue-800 rounded-xl border border-blue-700 -z-10" />
               <div className="absolute top-2 left-2 w-full h-full bg-blue-900 rounded-xl border border-blue-800 -z-20" />
               
-              {isMyTurn && (
+              {isMyTurn && !drawnCardId && pendingWild4Stack === 0 && (
                 <motion.div
                   animate={{ scale: [1, 1.1, 1] }}
                   transition={{ duration: 1, repeat: Infinity }}
                   className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-blue-300 font-bold text-xs bg-black/70 px-3 py-1 rounded-full"
                 >
                   Draw Card
+                </motion.div>
+              )}
+              {isMyTurn && !drawnCardId && pendingWild4Stack > 0 && (
+                <motion.div
+                  animate={{ scale: [1, 1.1, 1] }}
+                  transition={{ duration: 1, repeat: Infinity }}
+                  className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap text-red-400 font-bold text-xs bg-black/90 px-3 py-1 rounded-full border border-red-500"
+                >
+                  Draw {pendingWild4Stack} Penalty!
                 </motion.div>
               )}
             </motion.div>
@@ -247,22 +333,11 @@ const GameTable: React.FC = () => {
                     'border-yellow-400'}`}
               />
             </motion.div>
-
-            {/* Direction Indicator */}
-            <motion.div
-              className="absolute right-12 top-1/2 -translate-y-1/2"
-              animate={{ rotateZ: direction === -1 ? 180 : 0 }}
-              transition={{ duration: 0.5 }}
-            >
-              <div className="p-3 rounded-full bg-gradient-to-br from-indigo-500/40 to-purple-500/40 border-2 border-indigo-400/50 text-white">
-                <ArrowRight size={28} />
-              </div>
-            </motion.div>
           </div>
         </div>
       </div>
 
-      {/* Action Log (Toast) */}
+      {/* Action Log */}
       <AnimatePresence>
         {lastAction && (
           <motion.div
@@ -270,16 +345,61 @@ const GameTable: React.FC = () => {
             initial={{ opacity: 0, y: -20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20 }}
-            className="fixed top-8 left-1/2 -translate-x-1/2 bg-gradient-to-r from-blue-600/95 to-purple-600/95 backdrop-blur-md px-8 py-4 rounded-full text-white font-bold z-50 shadow-2xl shadow-blue-500/60 max-w-md text-center"
+            className="fixed top-8 left-1/2 -translate-x-1/2 bg-gradient-to-r from-slate-800/95 to-slate-900/95 backdrop-blur-md px-6 py-3 rounded-full text-white font-medium z-50 shadow-2xl border border-slate-700 max-w-lg text-center text-sm"
           >
             {lastAction}
           </motion.div>
         )}
       </AnimatePresence>
 
+      {/* Rule 5 +4 Stack Warning Indicator */}
+      <AnimatePresence>
+        {pendingWild4Stack > 0 && isMyTurn && !drawnCardId && (
+          <motion.div
+             initial={{ opacity: 0, scale: 0.5 }}
+             animate={{ opacity: 1, scale: 1 }}
+             exit={{ opacity: 0, scale: 0.5 }}
+             className="absolute top-1/4 left-1/2 -translate-x-1/2 bg-red-600/90 text-white px-8 py-4 rounded-2xl border-4 border-red-400 shadow-2xl z-40 text-center backdrop-blur-sm"
+          >
+             <h2 className="text-2xl font-black mb-2">🔥 +{pendingWild4Stack} INCOMING! 🔥</h2>
+             <p className="text-sm font-bold">Play a +4 to stack, or click Deck to Draw.</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Rule 3: Draw-and-Play Modal */}
+      <AnimatePresence>
+        {isMyTurn && drawnCardId && !drawnWildPlayCardId && drawnCardToPlay && (
+          <motion.div
+             initial={{ opacity: 0, y: 50 }}
+             animate={{ opacity: 1, y: 0 }}
+             exit={{ opacity: 0, y: 50 }}
+             className="absolute bottom-[280px] left-1/2 -translate-x-1/2 bg-slate-800/95 border border-slate-600 text-white px-8 py-6 rounded-3xl shadow-2xl z-50 text-center backdrop-blur-md flex flex-col items-center gap-4 min-w-[300px]"
+          >
+             <h3 className="text-xl font-bold text-yellow-300">You drew a card!</h3>
+             <div className="transform scale-75 origin-top">
+                <CardComponent card={drawnCardToPlay} disabled />
+             </div>
+             <div className="flex gap-4 w-full">
+                <button 
+                  onClick={() => handleDrawAndPlayDecision(true)}
+                  className="flex-1 bg-green-500 hover:bg-green-600 py-3 rounded-xl font-bold transition-colors"
+                >
+                  Play It
+                </button>
+                <button 
+                  onClick={() => handleDrawAndPlayDecision(false)}
+                  className="flex-1 bg-slate-600 hover:bg-slate-500 py-3 rounded-xl font-bold transition-colors"
+                >
+                  Keep & Pass
+                </button>
+             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* My Hand - Bottom */}
       <div className="relative z-10 w-full min-h-[220px] bg-gradient-to-t from-black/95 via-black/70 to-transparent flex flex-col justify-end pb-8 pt-20 overflow-visible">
-        {/* Status Text */}
         <div className="absolute top-8 left-0 right-0 text-center">
           {isMyTurn ? (
             <motion.span
@@ -298,27 +418,31 @@ const GameTable: React.FC = () => {
 
         {/* Cards */}
         <div className="flex justify-center items-end -space-x-6 md:-space-x-10 px-4 overflow-x-auto pb-6 pt-10 min-h-[180px] scrollbar-hide">
-          {me?.hand.map((card, i) => (
-            <motion.div
-              key={card.id}
-              initial={{ y: 100, opacity: 0, rotateZ: -20 }}
-              animate={{ y: 0, opacity: 1, rotateZ: 0 }}
-              transition={{ delay: i * 0.05, type: 'spring' }}
-              className={`origin-bottom transform hover:-translate-y-12 hover:scale-120 transition-all duration-200 cursor-pointer
-                ${selectedCardIds.has(card.id) ? 'ring-4 ring-yellow-400 -translate-y-8 scale-120 z-50' : 'z-0 hover:z-40'}`}
-            >
-              <CardComponent
-                card={card}
-                onClick={() => handleCardClick(card)}
-                disabled={!isMyTurn}
-                className={`${
-                  isMyTurn
-                    ? 'shadow-2xl shadow-white/40 hover:shadow-yellow-400/60'
-                    : 'opacity-90 shadow-lg'
-                } ${selectedCardIds.has(card.id) ? 'ring-4 ring-yellow-400' : ''} transform transition-all`}
-              />
-            </motion.div>
-          ))}
+          {me?.hand.map((card, i) => {
+            const isDrawnCard = card.id === drawnCardId;
+            const disabled = !isMyTurn || (drawnCardId && !isDrawnCard) || (pendingWild4Stack > 0 && card.value !== 'wild4');
+            const selected = selectedCardIds.has(card.id);
+
+            return (
+              <motion.div
+                key={card.id}
+                initial={{ y: 100, opacity: 0, rotateZ: -20 }}
+                animate={{ y: 0, opacity: 1, rotateZ: 0 }}
+                transition={{ delay: i * 0.05, type: 'spring' }}
+                className={`origin-bottom transform transition-all duration-200 
+                  ${disabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:-translate-y-12 hover:scale-110'}
+                  ${selected ? 'ring-4 ring-yellow-400 -translate-y-8 scale-110 z-50' : 'z-0'}
+                  ${isDrawnCard ? 'ring-4 ring-green-400 -translate-y-8 scale-110 z-50' : ''}`}
+              >
+                <CardComponent
+                  card={card}
+                  onClick={() => handleCardClick(card)}
+                  disabled={disabled && !isDrawnCard}
+                  className={`${isMyTurn && !disabled ? 'shadow-2xl shadow-white/20 hover:shadow-yellow-400/40' : 'shadow-lg'}`}
+                />
+              </motion.div>
+            )
+          })}
         </div>
 
         {/* Multi-card Play Button */}
@@ -330,16 +454,16 @@ const GameTable: React.FC = () => {
             onClick={handlePlaySelected}
           >
             <Play size={22} />
-            <span className="text-lg">Play {selectedCardIds.size}</span>
+            <span className="text-lg">Play {selectedCardIds.size} Card{selectedCardIds.size > 1 ? 's' : ''}</span>
           </motion.div>
         )}
       </div>
 
       <Chat />
 
-      {/* Wild Color Picker Modal */}
+      {/* Wild Color Picker Modal (Used for regular wild and drawn wild) */}
       <AnimatePresence>
-        {wildCardId && (
+        {(wildCardIds || drawnWildPlayCardId) && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
                 <motion.div 
                     initial={{ scale: 0.9, opacity: 0 }}
@@ -389,7 +513,6 @@ const GameTable: React.FC = () => {
                             { id: 'skip_all', name: 'Skip All', desc: 'Everyone skips once' },
                             { id: 'reverse_twice', name: 'Reverse Twice', desc: 'Reverse direction twice' },
                             { id: 'draw_two_all', name: 'Draw Two All', desc: 'Everyone draws 2 cards' },
-                            { id: 'everyone_swaps', name: 'Swap All', desc: 'Everyone swaps hands' }
                         ].map((rule) => (
                             <motion.button
                                 key={rule.id}
@@ -403,6 +526,81 @@ const GameTable: React.FC = () => {
                             </motion.button>
                         ))}
                     </div>
+                </motion.div>
+            </div>
+        )}
+      </AnimatePresence>
+
+      {/* Rule 4: Shuffle Hand Configuration Modal */}
+      <AnimatePresence>
+        {shuffleCardId && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+                <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.9, opacity: 0 }}
+                    className="bg-slate-900 p-8 rounded-3xl shadow-2xl text-center max-w-lg w-full border border-slate-700"
+                >
+                    <h3 className="text-3xl font-black mb-6 text-white flex items-center justify-center gap-3">
+                        <ArrowLeftRight size={32} className="text-blue-400" /> 
+                        Shuffle Hands
+                    </h3>
+                    
+                    {!shuffleAction ? (
+                        <div className="flex flex-col gap-4">
+                            <button 
+                                onClick={() => setShuffleAction('swap_with')}
+                                className="bg-slate-800 hover:bg-slate-700 p-6 rounded-2xl text-white font-bold text-lg transition-colors border border-slate-600 flex items-center justify-center gap-3"
+                            >
+                                <User size={24} className="text-green-400" />
+                                Swap with someone
+                            </button>
+                            <button 
+                                onClick={() => setShuffleAction('swap_two')}
+                                className="bg-slate-800 hover:bg-slate-700 p-6 rounded-2xl text-white font-bold text-lg transition-colors border border-slate-600 flex items-center justify-center gap-3"
+                            >
+                                <Users size={24} className="text-purple-400" />
+                                Make 2 players swap
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-6">
+                            <p className="text-slate-300 font-medium">
+                                {shuffleAction === 'swap_with' ? 'Select 1 player to swap your hand with:' : 'Select 2 players to swap their hands:'}
+                            </p>
+                            <div className="flex flex-wrap justify-center gap-4">
+                                {players.filter(p => shuffleAction === 'swap_two' ? true : p.id !== myPlayerId).map(p => {
+                                    const isSelected = shuffleTargetIds.includes(p.id);
+                                    return (
+                                        <button
+                                            key={p.id}
+                                            onClick={() => handleShuffleTargetSelect(p.id)}
+                                            className={`px-6 py-4 rounded-xl font-bold transition-all border-2
+                                                ${isSelected ? 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-500/50' : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                                        >
+                                            {p.name} ({p.hand.length} cards)
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            
+                            <div className="flex gap-4 mt-4">
+                                <button 
+                                    onClick={() => { setShuffleAction(null); setShuffleTargetIds([]); }}
+                                    className="flex-1 bg-slate-700 text-white py-3 rounded-xl font-bold hover:bg-slate-600"
+                                >
+                                    Back
+                                </button>
+                                <button 
+                                    onClick={confirmShuffle}
+                                    disabled={(shuffleAction === 'swap_with' && shuffleTargetIds.length !== 1) || (shuffleAction === 'swap_two' && shuffleTargetIds.length !== 2)}
+                                    className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Confirm Swap
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </motion.div>
             </div>
         )}

@@ -80,7 +80,7 @@ const CardComponent: React.FC<CardProps> = ({ card, onClick, className = '', dis
       className={`
         relative aspect-[2/3] w-24 md:w-32 rounded-xl shadow-xl border-4 border-white select-none cursor-pointer overflow-hidden
         ${baseColor}
-        ${disabled ? 'opacity-50 cursor-not-allowed grayscale' : ''}
+        ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
         ${className}
       `}
     >
