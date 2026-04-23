@@ -1,1 +1,110 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ── Casino Design Tokens ─────────────────────────────────────────── */
+:root {
+  --gold:        #c9a84c;
+  --gold-light:  #e8c96a;
+  --gold-dark:   #8a6f2e;
+  --felt:        #0d3320;
+  --felt-mid:    #0f4028;
+  --felt-light:  #145233;
+  --card-shadow: 0 8px 32px rgba(0,0,0,0.7);
+}
+
+/* ── Base Reset ───────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  background: #060d10;
+  color: #f0e8d0;
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Felt Table Background ────────────────────────────────────────── */
+.casino-felt {
+  background:
+    radial-gradient(ellipse at 50% 50%, var(--felt-mid) 0%, var(--felt) 60%, #060d10 100%);
+  position: relative;
+}
+.casino-felt::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(255,255,255,0.03) 1px, transparent 0);
+  background-size: 24px 24px;
+  pointer-events: none;
+}
+
+/* ── Gold Text ────────────────────────────────────────────────────── */
+.text-gold { color: var(--gold); }
+.text-gold-light { color: var(--gold-light); }
+
+/* ── Cinzel Display Font ──────────────────────────────────────────── */
+.font-display { font-family: 'Cinzel', serif; }
+
+/* ── Gold Border ──────────────────────────────────────────────────── */
+.border-gold { border-color: var(--gold); }
+
+/* ── Card Glow by Color ───────────────────────────────────────────── */
+.glow-red    { box-shadow: 0 0 24px 6px rgba(239,68,68,0.7),  0 0 60px 10px rgba(239,68,68,0.3); }
+.glow-blue   { box-shadow: 0 0 24px 6px rgba(59,130,246,0.7), 0 0 60px 10px rgba(59,130,246,0.3); }
+.glow-green  { box-shadow: 0 0 24px 6px rgba(34,197,94,0.7),  0 0 60px 10px rgba(34,197,94,0.3); }
+.glow-yellow { box-shadow: 0 0 24px 6px rgba(234,179,8,0.7),  0 0 60px 10px rgba(234,179,8,0.3); }
+.glow-black  { box-shadow: 0 0 24px 6px rgba(168,85,247,0.7), 0 0 60px 10px rgba(168,85,247,0.3); }
+.glow-gold   { box-shadow: 0 0 24px 6px rgba(201,168,76,0.8), 0 0 60px 12px rgba(201,168,76,0.4); }
+
+/* ── Scrollbar Hide ───────────────────────────────────────────────── */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Casino Panel ─────────────────────────────────────────────────── */
+.casino-panel {
+  background: linear-gradient(135deg, #0a1f15 0%, #0d2a1c 50%, #081510 100%);
+  border: 1px solid rgba(201,168,76,0.3);
+  box-shadow: inset 0 1px 0 rgba(201,168,76,0.15), 0 20px 60px rgba(0,0,0,0.6);
+}
+
+/* ── Gold Gradient Button ─────────────────────────────────────────── */
+.btn-gold {
+  background: linear-gradient(135deg, var(--gold-dark), var(--gold), var(--gold-light), var(--gold));
+  background-size: 200% 200%;
+  color: #1a0e00;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  transition: background-position 0.4s, box-shadow 0.3s, transform 0.2s;
+}
+.btn-gold:hover {
+  background-position: right center;
+  box-shadow: 0 0 20px rgba(201,168,76,0.6);
+  transform: translateY(-2px);
+}
+
+/* ── Input Casino Style ───────────────────────────────────────────── */
+.input-casino {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(201,168,76,0.3);
+  color: #f0e8d0;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.input-casino::placeholder { color: rgba(201,168,76,0.4); }
+.input-casino:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(201,168,76,0.15);
+}
+
+/* ── Pulsing Glow Animation ───────────────────────────────────────── */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+
+/* ── Deck Stack Shadows ───────────────────────────────────────────── */
+.deck-card {
+  box-shadow: var(--card-shadow);
+}
