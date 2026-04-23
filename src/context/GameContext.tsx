@@ -12,6 +12,7 @@ type GameAction =
   | { type: 'PLAY_CARD'; payload: { cardId: string; chosenColor?: Color } }
   | { type: 'DRAW_CARD' }
   | { type: 'CHAT'; payload: { text: string } }
+  | { type: 'APPLY_RULE'; payload: { rule: string } }
   | { type: 'SYNC_STATE'; payload: GameState }
   | { type: 'SYNC_CHAT'; payload: ChatMessage[] }
   | { type: 'ERROR'; payload: { message: string } };
@@ -28,6 +29,7 @@ interface GameContextType {
   playCard: (cardId: string, chosenColor?: Color) => void;
   drawCard: () => void;
   sendMessage: (text: string) => void;
+  applyRule: (rule: string) => void;
   error: string | null;
 }
 
@@ -146,6 +148,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
              firstCard = deck.pop();
         }
         
+        // Initialize UNO call tracking for all players
+        const unoCalledBy: { [playerId: string]: boolean } = {};
+        players.forEach(p => {
+            unoCalledBy[p.id] = false;
+        });
+        
         newState = {
             ...newState,
             deck,
@@ -156,7 +164,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             direction: 1,
             currentColor: firstCard ? firstCard.color : 'red', // Fallback
             winner: null,
-            lastAction: 'Game Started'
+            lastAction: 'Game Started',
+            unoCalledBy,
+            activeRule: null
         };
         broadcastState(newState);
         break;
@@ -188,6 +198,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             newState.lastAction = `${player.name} Won!`;
             broadcastState(newState);
             return;
+        }
+
+        // Check if player has 1 card (must call UNO)
+        if (player.hand.length === 1) {
+            newState.unoCalledBy[player.id] = true;
+            newState.lastAction += ' - UNO CALLED!';
         }
 
         // Handle Special Cards
@@ -225,6 +241,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
              }
              nextIndex = getNextPlayerIndex(nextIndex, newState.direction, newState.players.length); // Victim skips turn
              newState.lastAction += ' (Wild Draw 4)';
+        } else if (card.value === 'shuffle') {
+             // Shuffle cards between current player and next player
+             const victim = newState.players[nextIndex];
+             const temp = victim.hand;
+             victim.hand = player.hand;
+             player.hand = temp;
+             newState.lastAction += ` (Shuffled hands with ${victim.name})`;
+        } else if (card.value === 'blank_wild') {
+             // Blank wild - player can choose any rule
+             newState.lastAction += ' (Blank Wild - Rule applied!)';
         }
 
         newState.currentPlayerIndex = nextIndex;
@@ -282,6 +308,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         broadcastChat(newChat);
         break;
       }
+
+      case 'APPLY_RULE': {
+        // Handle blank wild rule application
+        const rule = action.payload.rule;
+        newState.activeRule = rule;
+        newState.lastAction = `Rule Activated: ${rule}`;
+        // Rules: 'skip_all', 'reverse_twice', 'draw_two_all', 'everyone_swaps', 'hide_cards'
+        broadcastState(newState);
+        break;
+      }
     }
   };
 
@@ -306,7 +342,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 status: 'lobby',
                 winner: null,
                 currentColor: 'red',
-                lastAction: null
+                lastAction: null,
+                unoCalledBy: {},
+                activeRule: null
             };
             hostStateRef.current = initialState;
             setGameState(initialState);
@@ -384,6 +422,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const applyRule = (rule: string) => {
+    if (isHost) {
+        handleHostAction({ type: 'APPLY_RULE', payload: { rule } }, myPlayerId);
+    } else {
+        connectionsRef.current['HOST']?.send({ type: 'APPLY_RULE', payload: { rule } });
+    }
+  };
+
   return (
     <GameContext.Provider value={{
         gameState,
@@ -397,6 +443,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         playCard,
         drawCard,
         sendMessage,
+        applyRule,
         error
     }}>
       {children}

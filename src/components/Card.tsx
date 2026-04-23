@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card as CardType, Color } from '../utils/gameLogic';
-import { Ban, RefreshCcw, Plus } from 'lucide-react';
+import { Ban, RefreshCcw, Plus, Shuffle, Wand2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface CardProps {
@@ -51,6 +51,22 @@ const CardComponent: React.FC<CardProps> = ({ card, onClick, className = '', dis
                 </div>
             </div>
         );
+      case 'shuffle':
+        return (
+            <div className="flex flex-col items-center leading-none text-white font-bold drop-shadow-md">
+                <Shuffle className="w-8 h-8 md:w-12 md:h-12 mb-2" />
+                <span className="text-xs md:text-sm">SHUFFLE</span>
+            </div>
+        );
+      case 'blank_wild':
+        return (
+            <div className="relative w-full h-full flex items-center justify-center">
+                <div className="absolute inset-0 bg-gradient-to-br from-purple-500 via-pink-500 to-orange-500 opacity-60 rounded-xl" />
+                <div className="z-10 flex flex-col items-center leading-none text-white font-bold drop-shadow-md">
+                    <Wand2 className="w-8 h-8 md:w-12 md:h-12" />
+                </div>
+            </div>
+        );
       default:
         return <span className="text-4xl md:text-6xl font-bold text-white drop-shadow-md" style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.2)' }}>{card.value}</span>;
     }
@@ -79,10 +95,10 @@ const CardComponent: React.FC<CardProps> = ({ card, onClick, className = '', dis
 
       {/* Small Corner Indicators */}
       <div className="absolute top-2 left-2 text-white font-bold text-sm md:text-lg opacity-90 drop-shadow-sm">
-         {card.value === 'skip' ? <Ban size={16} /> : card.value === 'reverse' ? <RefreshCcw size={16} /> : card.value === 'wild' ? 'W' : card.value === 'wild4' ? '+4' : card.value === 'draw2' ? '+2' : card.value}
+         {card.value === 'skip' ? <Ban size={16} /> : card.value === 'reverse' ? <RefreshCcw size={16} /> : card.value === 'wild' ? 'W' : card.value === 'wild4' ? '+4' : card.value === 'draw2' ? '+2' : card.value === 'shuffle' ? 'SH' : card.value === 'blank_wild' ? '?' : card.value}
       </div>
       <div className="absolute bottom-2 right-2 text-white font-bold text-sm md:text-lg opacity-90 drop-shadow-sm rotate-180">
-         {card.value === 'skip' ? <Ban size={16} /> : card.value === 'reverse' ? <RefreshCcw size={16} /> : card.value === 'wild' ? 'W' : card.value === 'wild4' ? '+4' : card.value === 'draw2' ? '+2' : card.value}
+         {card.value === 'skip' ? <Ban size={16} /> : card.value === 'reverse' ? <RefreshCcw size={16} /> : card.value === 'wild' ? 'W' : card.value === 'wild4' ? '+4' : card.value === 'draw2' ? '+2' : card.value === 'shuffle' ? 'SH' : card.value === 'blank_wild' ? '?' : card.value}
       </div>
       
       {/* Uno logo oval in background (subtle) */}
