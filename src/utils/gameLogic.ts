@@ -8,7 +8,7 @@ export type Value =
   | '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9'
   | 'skip' | 'reverse' | 'draw2'
   | 'wild' | 'wild4'
-  | 'shuffle'   // Rule 4: Shuffle Hand special card
+  | 'shuffle'      // Rule 4: Shuffle Hand special card
   | 'blank_wild';
 
 export interface Card {
@@ -38,10 +38,10 @@ export interface GameState {
   discardPile: Card[];
   players: Player[];
   currentPlayerIndex: number;
-  direction: 1 | -1;        // 1 = clockwise, -1 = counter-clockwise
+  direction: 1 | -1;         // 1 = clockwise, -1 = counter-clockwise
   status: 'lobby' | 'playing' | 'ended';
   winner: string | null;
-  currentColor: Color;       // Tracks active color (important for wilds)
+  currentColor: Color;        // Tracks active color (important for wilds)
   lastAction: string | null;
   unoCalledBy: { [playerId: string]: boolean };
   activeRule?: string | null; // Blank wild custom rule
@@ -67,9 +67,7 @@ export function createDeck(): Card[] {
   const deck: Card[] = [];
 
   COLORS.forEach(color => {
-    // One zero per color
     deck.push({ id: uuidv4(), color, value: '0' });
-    // Two of each 1-9 and action cards per color
     for (let i = 0; i < 2; i++) {
       VALUES.slice(1).forEach(value => {
         deck.push({ id: uuidv4(), color, value });
@@ -77,7 +75,6 @@ export function createDeck(): Card[] {
     }
   });
 
-  // 4 each of Wild, Wild Draw 4, Shuffle Hand, and Blank Wild
   for (let i = 0; i < 4; i++) {
     deck.push({ id: uuidv4(), color: 'black', value: 'wild' });
     deck.push({ id: uuidv4(), color: 'black', value: 'wild4' });
@@ -89,7 +86,6 @@ export function createDeck(): Card[] {
 }
 
 export function shuffleDeck(deck: Card[]): Card[] {
-  // Fisher-Yates shuffle for a fair distribution
   const arr = [...deck];
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -99,26 +95,26 @@ export function shuffleDeck(deck: Card[]): Card[] {
 }
 
 /**
- * Rule 2 – Draw Pile Exhaustion Handling
- * When the draw deck is empty, reshuffle the discard pile (minus the top card)
- * back into a new draw deck.  Returns the mutated state (no duplication or loss).
+ * Rule 2 – Draw Pile Exhaustion Handling.
+ * Reshuffles the discard pile (minus the current top card) into a new draw deck.
+ * discardPile is stored bottom→top, so the last element is the visible top card.
  */
 export function reshuffleDiscardIntoDeck(state: GameState): GameState {
-  if (state.deck.length > 0) return state; // Nothing to do
+  if (state.deck.length > 0) return state;
 
   const discardCopy = [...state.discardPile];
-  const topCard = discardCopy.pop(); // Keep the current top card in place
+  const topCard = discardCopy.pop(); // Preserve the top (most-recent) discard card
 
   if (discardCopy.length === 0) {
-    // Edge case: literally no cards left anywhere – can't reshuffle
+    // Truly no cards left — game is unresolvable, return unchanged
     return state;
   }
 
   return {
     ...state,
-    deck: shuffleDeck(discardCopy),      // Reshuffled former discard becomes new deck
-    discardPile: topCard ? [topCard] : [], // Only the top card remains in discard
-    lastAction: (state.lastAction ?? '') + ' (Deck reshuffled from discard pile)'
+    deck: shuffleDeck(discardCopy),           // Former discard becomes new draw deck
+    discardPile: topCard ? [topCard] : [],     // Only top card stays in discard
+    lastAction: (state.lastAction ?? '') + ' (Deck reshuffled from discard pile)',
   };
 }
 
@@ -136,7 +132,7 @@ export function drawOneCard(state: GameState): [GameState, Card | null] {
 }
 
 /**
- * Draw `count` cards for a specific player, handling reshuffle mid-draw.
+ * Draw `count` cards for a specific player, handling mid-draw reshuffles.
  */
 export function drawCardsForPlayer(
   state: GameState,
@@ -159,21 +155,17 @@ export function drawCardsForPlayer(
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
-/**
- * Returns true when a single card is a legal play on top of `topCard`
- * given the active `activeColor`.
- */
 export function isValidPlay(card: Card, topCard: Card, activeColor: Color): boolean {
-  if (card.color === 'black') return true;       // Wild cards are always playable
-  if (card.color === activeColor) return true;    // Color match
-  if (card.value === topCard.value) return true;  // Value match
+  if (card.color === 'black') return true;
+  if (card.color === activeColor) return true;
+  if (card.value === topCard.value) return true;
   return false;
 }
 
 /**
  * Rule 1 – Multiple Card Play validation.
- * All cards in the array must share the same value AND each must individually
- * be a legal play.  Black (wild) cards cannot be multi-played.
+ * All cards must share the same value AND the first card must be individually
+ * playable. Black cards cannot be multi-played.
  */
 export function canPlayMultipleCards(
   cards: Card[],
@@ -183,13 +175,10 @@ export function canPlayMultipleCards(
   if (cards.length === 0) return false;
   if (cards.length === 1) return isValidPlay(cards[0], topCard, activeColor);
 
-  // Wild / special black cards cannot be stacked with others in multi-play
   if (cards.some(c => c.color === 'black')) return false;
 
   const firstValue = cards[0].value;
-  // All cards must share the same value
   if (!cards.every(c => c.value === firstValue)) return false;
-  // At least the first card must be playable; rest match by value
   return isValidPlay(cards[0], topCard, activeColor);
 }
 
@@ -207,46 +196,51 @@ export function getNextPlayerIndex(
 
 /**
  * Rule 1 – Compute cumulative card effects for a batch of played cards.
- * Returns { drawPenalty, skipCount, reversed }.
+ *
+ * FIX: draw2 no longer contributes to skipTurns. The victim skip is handled
+ * in PLAY_CARDS by advancing nextIndex past the victim after drawing.
+ * Previously, counting skip here caused double-skip for multi draw2 plays.
+ *
+ * wild4 effects are intentionally excluded — handled via pendingWild4Stack (Rule 5).
+ *
+ * Returns { drawPenalty, skipTurns, reversed }
  */
 export function computeMultiCardEffect(cards: Card[]): {
-  drawPenalty: number;  // Total cards the next player must draw
-  skipCount: number;    // How many extra skips to apply
-  reversed: boolean;    // Whether direction should flip
+  drawPenalty: number;   // Total cards next player must draw (draw2 only; wild4 uses stack)
+  skipTurns: number;     // Additional turns to skip after victim is already skipped once
+  reversed: boolean;
 } {
   let drawPenalty = 0;
-  let skipCount = 0;
+  let skipTurns = 0;
   let reversed = false;
 
   for (const card of cards) {
     switch (card.value) {
       case 'draw2':
+        // Draw penalty accumulates; victim skip is applied once in PLAY_CARDS
         drawPenalty += 2;
-        skipCount += 1;  // draw2 also skips the victim
-        break;
-      case 'wild4':
-        drawPenalty += 4;
-        skipCount += 1;
         break;
       case 'skip':
-        skipCount += 1;
+        // Each additional skip card skips one more player
+        skipTurns += 1;
         break;
       case 'reverse':
-        reversed = !reversed; // Each reverse flips direction
+        reversed = !reversed;
         break;
+      // wild4 is intentionally omitted — handled via pendingWild4Stack
       default:
         break;
     }
   }
 
-  return { drawPenalty, skipCount, reversed };
+  return { drawPenalty, skipTurns, reversed };
 }
 
-// ─── Rule 4 Helper – Shuffle Hand ────────────────────────────────────────────
+// ─── Rule 4 Helper – Shuffle Hand ─────────────────────────────────────────────
 
 /**
  * Swap the entire hand of two players by index.
- * Mutates the players array in-place (operates on deep copies in GameContext).
+ * Returns a new players array without mutating the original.
  */
 export function swapHands(players: Player[], indexA: number, indexB: number): Player[] {
   const updated = players.map(p => ({ ...p, hand: [...p.hand] }));

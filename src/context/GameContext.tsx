@@ -15,7 +15,7 @@ type GameAction =
   | { type: 'JOIN'; payload: { name: string } }
   | { type: 'START_GAME' }
   /**
-   * PLAY_CARDS (replaces PLAY_CARD) – plays one or more cards in a single turn.
+   * PLAY_CARDS – plays one or more cards in a single turn.
    * For wild/shuffle cards, payload carries additional context.
    */
   | {
@@ -23,19 +23,17 @@ type GameAction =
       payload: {
         cardIds: string[];
         chosenColor?: Color;
-        // Rule 4 – Shuffle Hand choice
+        // Rule 4 – Shuffle Hand
         shuffleAction?: 'swap_with' | 'swap_two';
-        targetPlayerIds?: string[]; // 1 id for swap_with, 2 ids for swap_two
+        targetPlayerIds?: string[];
       };
     }
   /**
-   * DRAW_CARD – the current player draws one card.
-   * Used both for normal draw and when there is a pending +4 stack they must accept.
+   * DRAW_CARD – current player draws one card, or accepts a pending +4 stack penalty.
    */
   | { type: 'DRAW_CARD' }
   /**
-   * Rule 3 – After drawing, player can play the drawn card immediately.
-   * playDrawnCard=true means they want to play it; false means they pass.
+   * Rule 3 – After drawing, player decides to play the drawn card or pass.
    */
   | { type: 'PLAY_DRAWN_CARD'; payload: { play: boolean; chosenColor?: Color } }
   | { type: 'CHAT'; payload: { text: string } }
@@ -55,16 +53,13 @@ interface GameContextType {
   createGame: (name: string) => Promise<string>;
   joinGame: (roomId: string, name: string) => Promise<void>;
   startGame: () => void;
-  /** Play one or more cards (multi-play). Supply chosenColor for wild cards. */
   playCards: (
     cardIds: string[],
     chosenColor?: Color,
     shuffleAction?: 'swap_with' | 'swap_two',
     targetPlayerIds?: string[]
   ) => void;
-  /** Draw a card from the deck (or accept a +4 stack penalty). */
   drawCard: () => void;
-  /** After drawing, decide whether to play the drawn card or pass. */
   playDrawnCard: (play: boolean, chosenColor?: Color) => void;
   sendMessage: (text: string) => void;
   applyRule: (rule: string) => void;
@@ -92,7 +87,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const peerRef = useRef<Peer | null>(null);
   const connectionsRef = useRef<{ [key: string]: DataConnection }>({});
 
-  // Host-only canonical state lives in refs to avoid stale closures
+  // Host-only canonical state in refs to avoid stale closures
   const hostStateRef = useRef<GameState | null>(null);
   const hostChatRef = useRef<ChatMessage[]>([]);
 
@@ -144,7 +139,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const handleHostAction = (action: GameAction, senderId: string) => {
     if (!hostStateRef.current) return;
 
-    // Work on a deep copy of players so mutations are safe
     let s: GameState = {
       ...hostStateRef.current,
       players: hostStateRef.current.players.map(p => ({ ...p, hand: [...p.hand] })),
@@ -160,7 +154,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (s.players.some(p => p.id === senderId)) return;
         s.players.push({ id: senderId, name: action.payload.name, hand: [], isHost: false, isReady: true });
         broadcastState(s);
-        // Send chat history to the new player
         const conn = connectionsRef.current[senderId];
         if (conn) conn.send({ type: 'SYNC_CHAT', payload: hostChatRef.current });
         break;
@@ -171,7 +164,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (senderId !== s.players[0].id) return;
         if (s.players.length < 2) return;
 
-        const deck = createDeck();
+        let deck = createDeck();
         const players = s.players.map(p => ({ ...p, hand: [] as Card[] }));
 
         // Deal 7 cards to each player
@@ -182,11 +175,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         });
 
-        // Ensure first discard card is not a black/wild card
+        // FIX: Ensure first discard is not a black/wild card.
+        // Previously, shuffleDeck result was discarded in the while loop —
+        // the deck was never actually reshuffled between attempts.
         let firstCard = deck.pop();
         while (firstCard && firstCard.color === 'black') {
-          deck.unshift(firstCard); // Put it back at the bottom
-          shuffleDeck(deck);
+          deck.push(firstCard);         // Return the black card to the deck
+          deck = shuffleDeck(deck);     // FIX: re-assign the shuffled result
           firstCard = deck.pop();
         }
 
@@ -225,38 +220,43 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const { cardIds, chosenColor, shuffleAction, targetPlayerIds } = action.payload;
 
         // Locate all specified cards in the player's hand
-        const cardsToPlay = cardIds.map(id => player.hand.find(c => c.id === id)).filter(Boolean) as Card[];
-        if (cardsToPlay.length !== cardIds.length) return; // Some cards not found
+        const cardsToPlay = cardIds
+          .map(id => player.hand.find(c => c.id === id))
+          .filter(Boolean) as Card[];
+        if (cardsToPlay.length !== cardIds.length) return; // Card(s) not found in hand
 
         const topCard = s.discardPile[s.discardPile.length - 1];
 
-        // ── Rule 5: If there is a pending +4 stack, only a +4 card may respond ──
+        // ── Rule 5: Pending +4 stack – only a single wild4 may respond ──────
         if (s.pendingWild4Stack > 0) {
-          // The player must either play a wild4 to stack, or accept the penalty via DRAW_CARD
+          // The player must play exactly one wild4 to stack, or accept via DRAW_CARD
           const allWild4 = cardsToPlay.every(c => c.value === 'wild4');
-          if (!allWild4 || cardsToPlay.length !== 1) return; // Must play exactly one +4 to stack
+          if (!allWild4 || cardsToPlay.length !== 1) return;
         } else {
-          // ── Rule 1: Multi-card validation ───────────────────────────────────
+          // ── Rule 1: Multi-card validation ───────────────────────────────
           if (!canPlayMultipleCards(cardsToPlay, topCard, s.currentColor)) return;
         }
 
-        // ── Remove played cards from player's hand ────────────────────────────
+        // Remove played cards from hand
         const playedIds = new Set(cardIds);
         player.hand = player.hand.filter(c => !playedIds.has(c.id));
 
-        // ── Move cards to discard pile ────────────────────────────────────────
+        // Move cards to top of discard pile
         cardsToPlay.forEach(c => s.discardPile.push(c));
 
-        // Update active color (wild cards let the player choose)
         const lastPlayed = cardsToPlay[cardsToPlay.length - 1];
+
+        // FIX: Always apply chosenColor for wild cards, even when stacking +4.
+        // Previously, wild4 stacking early-returned before setting currentColor,
+        // leaving the color unchanged from the previous turn.
         s.currentColor = lastPlayed.color === 'black'
-          ? (chosenColor || 'red')
+          ? (chosenColor ?? 'red')
           : lastPlayed.color;
 
         const names = cardsToPlay.map(c => `${c.color} ${c.value}`).join(', ');
         s.lastAction = `${player.name} played: ${names}`;
 
-        // ── Check Win ─────────────────────────────────────────────────────────
+        // ── Check Win ──────────────────────────────────────────────────────
         if (player.hand.length === 0) {
           s.status = 'ended';
           s.winner = player.name;
@@ -265,68 +265,74 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
 
-        // Track UNO call (1 card left)
         if (player.hand.length === 1) {
           s.unoCalledBy[player.id] = true;
           s.lastAction += ' — UNO!';
         }
 
-        // ── Compute cumulative effects (Rule 1 + Rule 5) ──────────────────────
+        // ── Rule 5: Stack wild4 onto existing penalty ──────────────────────
         const isWild4Play = cardsToPlay.every(c => c.value === 'wild4');
-
-        // Rule 5: Stack wild4 on existing penalty
         if (isWild4Play) {
           s.pendingWild4Stack += cardsToPlay.length * 4;
           s.lastAction += ` (+4 Stacked → total ${s.pendingWild4Stack} pending)`;
-          // Advance turn without drawing; the next player must respond
+          // Advance turn — next player must respond or accept the stack
           s.currentPlayerIndex = getNextPlayerIndex(s.currentPlayerIndex, s.direction, s.players.length);
           s.drawnCardId = null;
           broadcastState(s);
           return;
         }
 
-        // Reset wild4 stack for non-wild4 plays
+        // Reset stack for all non-wild4 plays
         s.pendingWild4Stack = 0;
 
-        const { drawPenalty, skipCount, reversed } = computeMultiCardEffect(cardsToPlay);
+        const { drawPenalty, skipTurns, reversed } = computeMultiCardEffect(cardsToPlay);
 
-        // Apply direction reversal
         if (reversed) {
           s.direction = s.direction === 1 ? -1 : 1;
           s.lastAction += ' (Reversed)';
         }
 
-        // Determine base next player
+        // Start at the player immediately after the current one
         let nextIndex = getNextPlayerIndex(s.currentPlayerIndex, s.direction, s.players.length);
 
-        // Apply draw penalty to the next player
+        // Apply draw penalty to the immediate next player (the "victim")
         if (drawPenalty > 0) {
           s = drawCardsForPlayer(s, nextIndex, drawPenalty);
           s.lastAction += ` (${s.players[nextIndex].name} draws ${drawPenalty})`;
-        }
-
-        // Apply skip(s) — each skip advances the turn one more step
-        for (let i = 0; i < skipCount; i++) {
+          // The victim is always skipped exactly once after drawing
           nextIndex = getNextPlayerIndex(nextIndex, s.direction, s.players.length);
         }
 
-        // ── Rule 4: Shuffle Hand ──────────────────────────────────────────────
+        // Apply any extra skips from skip cards (each skips one more player)
+        for (let i = 0; i < skipTurns; i++) {
+          nextIndex = getNextPlayerIndex(nextIndex, s.direction, s.players.length);
+        }
+
+        // ── Rule 4: Shuffle Hand ───────────────────────────────────────────
         if (lastPlayed.value === 'shuffle') {
           if (shuffleAction === 'swap_with' && targetPlayerIds?.length === 1) {
             const targetIdx = s.players.findIndex(p => p.id === targetPlayerIds[0]);
             if (targetIdx !== -1) {
+              // Capture names BEFORE the swap for accurate log message
+              const myName = s.players[playerIndex].name;
+              const theirName = s.players[targetIdx].name;
               s.players = swapHands(s.players, playerIndex, targetIdx);
-              s.lastAction += ` (Swapped hands with ${s.players[playerIndex].name})`;
+              s.lastAction += ` (${myName} swapped hands with ${theirName})`;
             }
           } else if (shuffleAction === 'swap_two' && targetPlayerIds?.length === 2) {
             const idxA = s.players.findIndex(p => p.id === targetPlayerIds[0]);
             const idxB = s.players.findIndex(p => p.id === targetPlayerIds[1]);
             if (idxA !== -1 && idxB !== -1) {
+              // FIX: Capture names before swap; after swap the hand contents
+              // are exchanged but the player objects (including names) stay in
+              // their index positions, so names are still accurate post-swap.
+              const nameA = s.players[idxA].name;
+              const nameB = s.players[idxB].name;
               s.players = swapHands(s.players, idxA, idxB);
-              s.lastAction += ` (Made ${s.players[idxA].name} and ${s.players[idxB].name} swap hands)`;
+              s.lastAction += ` (${nameA} and ${nameB} swapped hands)`;
             }
           }
-          // Turn order is NOT broken by shuffle hand
+          // Turn order is NOT affected by a Shuffle Hand play
         }
 
         s.currentPlayerIndex = nextIndex;
@@ -343,29 +349,29 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const player = s.players[pIdx];
 
-        // ── Rule 5: Accept the stacked +4 penalty ────────────────────────────
+        // ── Rule 5: Accept the stacked +4 penalty ──────────────────────────
         if (s.pendingWild4Stack > 0) {
           const penalty = s.pendingWild4Stack;
           s = drawCardsForPlayer(s, pIdx, penalty);
           s.pendingWild4Stack = 0;
-          s.lastAction = `${player.name} drew ${penalty} cards (Wild +4 stack)`;
+          s.lastAction = `${player.name} drew ${penalty} cards (Wild +4 stack accepted)`;
           s.currentPlayerIndex = getNextPlayerIndex(pIdx, s.direction, s.players.length);
           s.drawnCardId = null;
           broadcastState(s);
           return;
         }
 
-        // ── Rule 3: Normal draw ───────────────────────────────────────────────
+        // ── Rule 3: Normal draw ────────────────────────────────────────────
         let drawnCard: Card | null;
         [s, drawnCard] = drawOneCard(s);
 
         if (drawnCard) {
           s.players[pIdx].hand.push(drawnCard);
           s.lastAction = `${player.name} drew a card`;
-          // Rule 3: Expose the drawn card id so the UI can offer play-or-pass
+          // Expose drawn card id so UI can offer play-or-pass (Rule 3)
           s.drawnCardId = drawnCard.id;
         } else {
-          // No cards anywhere — pass turn silently
+          // Deck truly empty (even after reshuffle attempt) — pass turn
           s.lastAction = `${player.name} tried to draw (deck empty!)`;
           s.drawnCardId = null;
           s.currentPlayerIndex = getNextPlayerIndex(pIdx, s.direction, s.players.length);
@@ -377,17 +383,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // ── PLAY_DRAWN_CARD ────────────────────────────────────────────────────
       case 'PLAY_DRAWN_CARD': {
-        // Rule 3: After drawing, the player decides to play or skip
         if (s.status !== 'playing') return;
         const pIdx = s.players.findIndex(p => p.id === senderId);
         if (pIdx !== s.currentPlayerIndex) return;
-        if (!s.drawnCardId) return; // No drawn card to play
+        if (!s.drawnCardId) return; // No drawn card pending
 
         const player = s.players[pIdx];
         const { play, chosenColor } = action.payload;
 
         if (!play) {
-          // Player chooses to pass — advance turn
+          // Player passes — advance turn without playing
           s.lastAction = `${player.name} passed (kept drawn card)`;
           s.drawnCardId = null;
           s.currentPlayerIndex = getNextPlayerIndex(pIdx, s.direction, s.players.length);
@@ -395,13 +400,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
 
-        // Player wants to play the drawn card immediately
         const drawnCard = player.hand.find(c => c.id === s.drawnCardId);
         if (!drawnCard) return;
 
         const topCard = s.discardPile[s.discardPile.length - 1];
         if (!isValidPlay(drawnCard, topCard, s.currentColor)) {
-          // Drawn card is not playable (shouldn't happen if UI validates, but guard anyway)
+          // Drawn card turned out not playable — pass turn
           s.lastAction = `${player.name} passed (drawn card not playable)`;
           s.drawnCardId = null;
           s.currentPlayerIndex = getNextPlayerIndex(pIdx, s.direction, s.players.length);
@@ -409,10 +413,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
 
-        // Remove from hand, add to discard
+        // Play the drawn card: remove from hand and add to discard
         player.hand = player.hand.filter(c => c.id !== drawnCard.id);
         s.discardPile.push(drawnCard);
-        s.currentColor = drawnCard.color === 'black' ? (chosenColor || 'red') : drawnCard.color;
+        s.currentColor = drawnCard.color === 'black' ? (chosenColor ?? 'red') : drawnCard.color;
         s.lastAction = `${player.name} played drawn card: ${drawnCard.color} ${drawnCard.value}`;
         s.drawnCardId = null;
 
@@ -430,21 +434,33 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           s.lastAction += ' — UNO!';
         }
 
-        // Apply the single drawn card's effect
-        const { drawPenalty, skipCount, reversed } = computeMultiCardEffect([drawnCard]);
+        // ── FIX: wild4 drawn card initiates a NEW pending stack ────────────
+        // Previously, computeMultiCardEffect was also called for wild4 which
+        // produced a double-penalty (immediate draw + pending stack).
+        // wild4 is now handled exclusively via pendingWild4Stack.
+        if (drawnCard.value === 'wild4') {
+          s.pendingWild4Stack = 4; // Start a fresh stack for the next player
+          s.lastAction += ` (+4 Stacked → total 4 pending)`;
+          s.currentPlayerIndex = getNextPlayerIndex(pIdx, s.direction, s.players.length);
+          broadcastState(s);
+          return;
+        }
+
+        // For all non-wild4 cards, compute and apply their effect normally
+        const { drawPenalty, skipTurns, reversed } = computeMultiCardEffect([drawnCard]);
         if (reversed) s.direction = s.direction === 1 ? -1 : 1;
 
         let nextIndex = getNextPlayerIndex(pIdx, s.direction, s.players.length);
+
         if (drawPenalty > 0) {
           s = drawCardsForPlayer(s, nextIndex, drawPenalty);
-        }
-        for (let i = 0; i < skipCount; i++) {
+          s.lastAction += ` (${s.players[nextIndex].name} draws ${drawPenalty})`;
+          // Skip the victim after they draw
           nextIndex = getNextPlayerIndex(nextIndex, s.direction, s.players.length);
         }
 
-        // Handle wild4 stacking for the drawn card
-        if (drawnCard.value === 'wild4') {
-          s.pendingWild4Stack = 4;
+        for (let i = 0; i < skipTurns; i++) {
+          nextIndex = getNextPlayerIndex(nextIndex, s.direction, s.players.length);
         }
 
         s.currentPlayerIndex = nextIndex;

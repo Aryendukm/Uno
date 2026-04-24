@@ -108,3 +108,10 @@ html, body, #root {
 .deck-card {
   box-shadow: var(--card-shadow);
 }
+
+/* ── Missing Tailwind Utilities ───────────────────────────────────── */
+/* border-3 is not in Tailwind's default scale */
+.border-3 { border-width: 3px; }
+
+/* Ensure game table fills viewport height correctly on all devices */
+#root { display: flex; flex-direction: column; overflow: hidden; }
